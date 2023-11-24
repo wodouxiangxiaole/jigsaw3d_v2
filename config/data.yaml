@@ -1,0 +1,64 @@
+data:
+
+  batch_size: 40
+  val_batch_size: 20
+  num_workers: 12
+  train_nepoch: 20000
+  save_nepoch: 50
+  val_nepoch: 100
+  data_fn: "everyday.{}.txt"
+  
+  data_dir: "../Breaking-Bad-Dataset.github.io/data/volume_constrained/"
+  category: "Bottle"
+  rot_range: -1
+  overfit: -1
+
+  data_keys:
+    - 'part_ids'
+  num_pc_points: 5000  # points for all parts
+  min_num_part: 2
+  max_num_part: 20
+  shuffle_parts: False
+  all_category:
+    - 'BeerBottle'
+    - 'Bowl'
+    - 'Cup'
+    - 'DrinkingUtensil'
+    - 'Mug'
+    - 'Plate'
+    - 'Spoon'
+    - 'Teacup'
+    - 'ToyFigure'
+    - 'WineBottle'
+    - 'Bottle'
+    - 'Cookie'
+    - 'DrinkBottle'
+    - 'Mirror'
+    - 'PillBottle'
+    - 'Ring'
+    - 'Statue'
+    - 'Teapot'
+    - 'Vase'
+    - 'WineGlass'
+  colors:
+    - [0, 204, 0]
+    - [204, 0, 0]
+    - [0, 204, 0]
+    - [127, 127, 0]
+    - [127, 0, 127]
+    - [0, 127, 127]
+    - [76, 153, 0]
+    - [153, 0, 76]
+    - [76, 0, 153]
+    - [153, 76, 0]
+    - [76, 0, 153]
+    - [153, 0, 76]
+    - [204, 51, 127]
+    - [204, 51, 127]
+    - [51, 204, 127]
+    - [51, 127, 204]
+    - [127, 51, 204]
+    - [127, 204, 51]
+    - [76, 76, 178]
+    - [76, 178, 76]
+    - [178, 76, 76]

@@ -1,0 +1,23 @@
+model:
+  
+  model_name: 
+    _target_: jigsaw.model.jigsaw.Jigsaw3D
+
+  type: "avg_pool"
+  embedding_type: mlpa
+  out_channels: 7
+  std: 1
+  multires: 10
+  embed_dim: 128
+  num_layers: 6
+  num_heads: 4
+  dropout_rate: 0.1
+  DDPM_TRAIN_STEPS: 1000
+  DDPM_BETA_SCHEDULE: "linear"
+  PREDICT_TYPE: 'epsilon'
+  BETA_START: 0.0001
+  BETA_END: 0.02
+  condition_latent: True
+  condition_position: True
+  position_encoding: True
+  PC_FEAT_DIM: 128
