@@ -3,6 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from time import time
 import numpy as np
+from torch_cluster import fps
+
 
 def timeit(tag, t):
     print("{}: {}s".format(tag, time() - t))
@@ -60,28 +62,28 @@ def index_points(points, idx):
     return new_points
 
 
-def farthest_point_sample(xyz, npoint):
-    """
-    Input:
-        xyz: pointcloud data, [B, N, 3]
-        npoint: number of samples
-    Return:
-        centroids: sampled pointcloud index, [B, npoint]
-    """
-    device = xyz.device
-    B, N, C = xyz.shape
-    centroids = torch.zeros(B, npoint, dtype=torch.long).to(device)
-    distance = torch.ones(B, N).to(device) * 1e10
-    farthest = torch.randint(0, N, (B,), dtype=torch.long).to(device)
-    batch_indices = torch.arange(B, dtype=torch.long).to(device)
-    for i in range(npoint):
-        centroids[:, i] = farthest
-        centroid = xyz[batch_indices, farthest, :].view(B, 1, 3)
-        dist = torch.sum((xyz - centroid) ** 2, -1)
-        mask = dist < distance
-        distance[mask] = dist[mask]
-        farthest = torch.max(distance, -1)[1]
-    return centroids
+# def farthest_point_sample(xyz, npoint):
+#     """
+#     Input:
+#         xyz: pointcloud data, [B, N, 3]
+#         npoint: number of samples
+#     Return:
+#         centroids: sampled pointcloud index, [B, npoint]
+#     """
+#     device = xyz.device
+#     B, N, C = xyz.shape
+#     centroids = torch.zeros(B, npoint, dtype=torch.long).to(device)
+#     distance = torch.ones(B, N).to(device) * 1e10
+#     farthest = torch.randint(0, N, (B,), dtype=torch.long).to(device)
+#     batch_indices = torch.arange(B, dtype=torch.long).to(device)
+#     for i in range(npoint):
+#         centroids[:, i] = farthest
+#         centroid = xyz[batch_indices, farthest, :].view(B, 1, 3)
+#         dist = torch.sum((xyz - centroid) ** 2, -1)
+#         mask = dist < distance
+#         distance[mask] = dist[mask]
+#         farthest = torch.max(distance, -1)[1]
+#     return centroids
 
 
 def query_ball_point(radius, nsample, xyz, new_xyz):
@@ -121,8 +123,17 @@ def sample_and_group(npoint, radius, nsample, xyz, points, returnfps=False):
     """
     B, N, C = xyz.shape
     S = npoint
-    fps_idx = farthest_point_sample(xyz, npoint) # [B, npoint, C]
-    new_xyz = index_points(xyz, fps_idx)
+    # fps_idx = farthest_point_sample(xyz, npoint) # [B, npoint, C]
+
+    # CUDA version fps samling. Speed up the fps time
+    batch = torch.arange(B).unsqueeze(-1).repeat(1, N).reshape(-1).to(xyz.device)
+    ratio = torch.tensor(npoint / N, dtype=torch.float64, device=xyz.device)
+    fps_idx = fps(xyz.reshape(B*N, -1), batch=batch, ratio=ratio)
+    batch_offsets = (fps_idx // N) * N
+    fps_idx = fps_idx - batch_offsets
+
+
+    new_xyz = index_points(xyz, fps_idx.reshape(B, -1))
     idx = query_ball_point(radius, nsample, xyz, new_xyz)
     grouped_xyz = index_points(xyz, idx) # [B, npoint, nsample, C]
     grouped_xyz_norm = grouped_xyz - new_xyz.view(B, S, 1, C)

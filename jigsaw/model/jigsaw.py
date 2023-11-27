@@ -139,7 +139,7 @@ class Jigsaw3D(pl.LightningModule):
     def test_step(self, data_dict, idx):
         self.validation_step(data_dict, idx)
         pass
-    
+
     def on_test_epoch_end(self):
         pass
 
