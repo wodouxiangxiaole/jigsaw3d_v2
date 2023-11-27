@@ -7,6 +7,7 @@ from scipy.spatial.transform import Rotation as R
 
 from torch.utils.data import Dataset, DataLoader
 import sys
+from tqdm import tqdm
 
 class GeometryPartDataset(Dataset):
     """Geometry part assembly dataset.
@@ -46,6 +47,53 @@ class GeometryPartDataset(Dataset):
 
         # additional data to load, e.g. ('part_ids', 'instance_label')
         self.data_keys = data_keys
+
+        self.data_dicts = []        
+
+        print("start processed data")
+
+        for index in tqdm(range(len(self.data_list))):
+            pcs, piece_id, nps, areas = self._get_pcs(self.data_list[index])
+            num_parts = len(pcs)
+            cur_pts, cur_quat, cur_trans, cur_pts_gt = [], [], [], []
+            for i, (pc, n_p) in enumerate(zip(pcs, nps)):
+                pc_gt = pc.copy()
+                pc, gt_trans = self._recenter_pc(pc)
+                pc, gt_quat = self._rotate_pc(pc)
+                # pc_shuffle, pc_gt_shuffle = self._shuffle_pc(pc, pc_gt)
+
+                cur_pts.append(pc)
+                cur_quat.append(gt_quat)
+                cur_trans.append(gt_trans)
+                cur_pts_gt.append(pc_gt)
+
+            cur_pts = np.concatenate(cur_pts).astype(np.float32)  # [N_sum, 3]
+            cur_pts_gt = np.concatenate(cur_pts_gt).astype(np.float32)  # [N_sum, 3]
+            cur_quat = self._pad_data(np.stack(cur_quat, axis=0), self.max_num_part).astype(np.float32)  # [P, 4]
+            cur_trans = self._pad_data(np.stack(cur_trans, axis=0), self.max_num_part).astype(np.float32)  # [P, 3]
+            n_pcs = self._pad_data(np.array(nps), self.max_num_part).astype(np.int64)  # [P]
+            valids = np.zeros(self.max_num_part, dtype=np.float32)
+            valids[:num_parts] = 1.0
+
+
+            data_dict = {
+                'part_pcs': cur_pts,
+                'part_quat': cur_quat,
+                'part_trans': cur_trans,
+                "n_pcs": n_pcs,
+                'part_pcs_gt': cur_pts_gt,
+            }
+            # valid part masks
+            data_dict['part_valids'] = valids
+            data_dict['mesh_file_path'] = self.data_list[index]
+            data_dict['num_parts'] = num_parts
+
+            # data_id
+            data_dict['data_id'] = index
+
+            self.data_dicts.append(data_dict)
+
+
 
     def _read_data(self, data_fn):
         """Filter out invalid number of parts."""
@@ -146,6 +194,7 @@ class GeometryPartDataset(Dataset):
         # This implementation is not very elegant, could improve by resample by areas.
         return np.array(nps, dtype=np.int64)
     
+    
     def _get_pcs(self, data_folder):
         """Read mesh and sample point cloud from a folder."""
         # `piece`: xxx/plate/1d4093ad2dfad9df24be2e4f911ee4af/fractured_0/piece_0.obj
@@ -202,45 +251,8 @@ class GeometryPartDataset(Dataset):
 
         }
         """
-        
-        pcs, piece_id, nps, areas = self._get_pcs(self.data_list[index])
-        num_parts = len(pcs)
-        cur_pts, cur_quat, cur_trans, cur_pts_gt = [], [], [], []
-        for i, (pc, n_p) in enumerate(zip(pcs, nps)):
-            pc_gt = pc.copy()
-            pc, gt_trans = self._recenter_pc(pc)
-            pc, gt_quat = self._rotate_pc(pc)
-            # pc_shuffle, pc_gt_shuffle = self._shuffle_pc(pc, pc_gt)
 
-            cur_pts.append(pc)
-            cur_quat.append(gt_quat)
-            cur_trans.append(gt_trans)
-            cur_pts_gt.append(pc_gt)
-
-        cur_pts = np.concatenate(cur_pts).astype(np.float32)  # [N_sum, 3]
-        cur_pts_gt = np.concatenate(cur_pts_gt).astype(np.float32)  # [N_sum, 3]
-        cur_quat = self._pad_data(np.stack(cur_quat, axis=0), self.max_num_part).astype(np.float32)  # [P, 4]
-        cur_trans = self._pad_data(np.stack(cur_trans, axis=0), self.max_num_part).astype(np.float32)  # [P, 3]
-        n_pcs = self._pad_data(np.array(nps), self.max_num_part).astype(np.int64)  # [P]
-        valids = np.zeros(self.max_num_part, dtype=np.float32)
-        valids[:num_parts] = 1.0
-
-
-        data_dict = {
-            'part_pcs': cur_pts,
-            'part_quat': cur_quat,
-            'part_trans': cur_trans,
-            "n_pcs": n_pcs,
-        }
-        # valid part masks
-        data_dict['part_valids'] = valids
-        data_dict['mesh_file_path'] = self.data_list[index]
-        data_dict['num_parts'] = num_parts
-
-        # data_id
-        data_dict['data_id'] = index
-
-        return data_dict
+        return self.data_dicts[index]
 
     def __len__(self):
         return len(self.data_list)

@@ -2,7 +2,7 @@
 xgutils/
 vis_scirpts/
 output/
-
+output_latent/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

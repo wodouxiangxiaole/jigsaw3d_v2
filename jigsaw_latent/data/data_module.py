@@ -2,7 +2,7 @@ import torch
 import lightning.pytorch as pl
 from importlib import import_module
 from torch.utils.data import DataLoader
-from jigsaw.dataset.dynamic_dataset import build_geometry_dataloader
+from jigsaw_latent.dataset.dataset import build_geometry_dataloader
 
 class DataModule(pl.LightningDataModule):
     def __init__(self, cfg):

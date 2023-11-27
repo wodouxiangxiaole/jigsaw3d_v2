@@ -30,9 +30,8 @@ class DiffModel(nn.Module):
 
         self.out_channel = cfg.model.out_channels
 
-        self.encoder = PointNet2PTMSGDynamic(feat_out=128)
-
         self.model_channels = cfg.model.embed_dim
+
         self.tf_self1 = PointTransformerLayer(
             in_feat=self.pc_feat_dim, out_feat=self.pc_feat_dim,
             n_heads=8, nsampmle=16,
@@ -41,7 +40,6 @@ class DiffModel(nn.Module):
         self.tf_cross1 = CrossAttentionLayer(d_in=self.pc_feat_dim,
                                              n_head=8,)
         
-
         self.time_embed = nn.Sequential(
             nn.Linear(self.model_channels, self.model_channels),
             nn.SiLU(),
@@ -52,7 +50,25 @@ class DiffModel(nn.Module):
                                               out_planes=self.pc_feat_dim,
                                               stride=4)
         
-        self.tf_layers = [("self", self.tf_self1), ("cross", self.tf_cross1), ("down", self.transition_down)]
+
+        multires = 10
+        embed_kwargs = {
+            'include_input': True,
+            'input_dims': 7,
+            'max_freq_log2': multires - 1,
+            'num_freqs': multires,
+            'log_sampling': True,
+            'periodic_fns': [torch.sin, torch.cos],
+        }
+        
+        embedder_obj = EmbedderNerf(**embed_kwargs)
+        self.param_embedding = lambda x, eo=embedder_obj: eo.embed(x)
+
+        self.param_fc = nn.Linear(147, self.model_channels)
+        self.pe = nn.Linear(3, self.pc_feat_dim)
+
+        
+        self.tf_layers = [("self", self.tf_self1), ("cross", self.tf_cross1)]
 
         self.out = nn.Sequential(
             nn.Linear(self.model_channels, 256),
@@ -67,7 +83,6 @@ class DiffModel(nn.Module):
         )
 
     
-    
     def _extract_part_feats(self, part_pcs, batch_length):
         B, N_sum, _ = part_pcs.shape  # [B, N_sum, 3]
         # shared-weight encoder
@@ -79,13 +94,14 @@ class DiffModel(nn.Module):
     
     def forward(self, noise_param, timesteps, data_dict):
         """
-        noise_trans: [B, N_sum, 4]
+        noise_trans: [B, P, 7]
         """
         part_valids = data_dict["part_valids"]
 
         noise_param = noise_param.reshape(-1, 7)
 
         noise_param = noise_param[part_valids.reshape(-1).bool()]
+        
         noise_quat = noise_param[:, 3:]
         noise_quat = noise_quat / noise_quat.norm(dim=-1, keepdim=True)
 
@@ -110,62 +126,73 @@ class DiffModel(nn.Module):
         cnt = 0
         for i in range(batch_length.shape[0]):
 
-            t = transforms.quaternion_apply(
+            current_pcs = transforms.quaternion_apply(
                 noise_quat[i], 
                 reshape_part_pcs[cnt:cnt+batch_length[i], :]
                 )
-            t += t + noise_trans[i]
-            trans_part_pcs.append(t)
+            current_pcs = current_pcs + noise_trans[i]
+            trans_part_pcs.append(current_pcs)
             cnt += batch_length[i]
             
 
         part_pcs = torch.cat(trans_part_pcs, dim=0).reshape(-1, 5000, 3)
-        part_input = part_pcs
 
-        
-        B, N_sum, _ = part_pcs.shape
-        
+        B, N_sum, _ = part_pcs.shape        
 
-        part_feats = self._extract_part_feats(part_input, batch_length)
+        part_feats = self.pe(part_pcs)
+
+
+        param_emb = self.param_fc(self.param_embedding(noise_param))
+
 
         part_feats = part_feats + time_emb.unsqueeze(1)
+        part_feats_flatten = part_feats.reshape(-1, self.pc_feat_dim).contiguous()
 
         part_pcs_flatten = part_pcs.reshape(-1, 3).contiguous()
 
+
+        input_emb = []
+        cnt = 0
+        for i in range(batch_length.shape[0]):
+            current_feats = part_feats_flatten[cnt:cnt+batch_length[i], :]
+            current_feats += param_emb[i]
+            input_emb.append(current_feats)
+            cnt += batch_length[i]
+
+        data_emb = torch.cat(input_emb, dim=0).reshape(-1, self.pc_feat_dim).contiguous()
+
+
         for name, layer in self.tf_layers:
             if name == "self":
-                part_feats = (
+                data_emb = (
                     layer(
                         part_pcs_flatten,
-                        part_feats.view(-1, self.pc_feat_dim),
+                        data_emb,
                         batch_length,
                     )
                     .view(B, N_sum, -1)
                     .contiguous()
                 )
             elif name == "cross":
-                part_feats = layer(part_feats)
-            else:
-                part_pcs_flatten, part_feats, batch_length = self.transition_down(
-                    part_pcs_flatten,
-                    part_feats.view(-1, self.pc_feat_dim), 
-                    batch_length
-                )
+                data_emb = layer(data_emb)
+            # else:
+            #     part_pcs_flatten, part_feats, batch_length = self.transition_down(
+            #         part_pcs_flatten,
+            #         part_feats.view(-1, self.pc_feat_dim), 
+            #         batch_length
+            #     )
         
         x = []
-
+        data_emb = data_emb.reshape(-1, self.pc_feat_dim).contiguous()
         cnt = 0
         for i in range(batch_length.shape[0]):
 
-            x_b = part_feats[cnt:cnt+batch_length[i], :]
+            x_b = data_emb[cnt:cnt+batch_length[i], :]
             x_b = torch.mean(x_b, dim=0, keepdim=True)
             x.append(x_b)
             cnt += batch_length[i]
-
-            
         
         x = torch.cat(x, dim=0)
         out = self.out(x)
-
 
         return out

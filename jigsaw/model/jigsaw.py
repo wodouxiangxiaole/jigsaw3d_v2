@@ -12,6 +12,7 @@ from jigsaw.evaluation.jigsaw_evaluator import (
     trans_metrics,
     randn_tensor
 )
+import numpy as np
 
 
 class Jigsaw3D(pl.LightningModule):
@@ -28,6 +29,8 @@ class Jigsaw3D(pl.LightningModule):
             beta_end=cfg.model.BETA_END,
             clip_sample=False,
         )
+
+        self.noise_scheduler.set_timesteps(num_inference_steps=50)
 
         self.acc_list = []
         self.rmse_r_list = []
@@ -54,7 +57,7 @@ class Jigsaw3D(pl.LightningModule):
 
         output_dict = {
             'pred_noise': pred_noise,
-            'noise': noise
+            'gt_noise': noise
         }
 
         return output_dict
@@ -63,7 +66,7 @@ class Jigsaw3D(pl.LightningModule):
     def _loss(self, data_dict, output_dict):
         pred_noise = output_dict['pred_noise']
         part_valids = data_dict['part_valids'].bool()
-        noise = output_dict['noise']
+        noise = output_dict['gt_noise']
         loss = F.mse_loss(pred_noise, noise[part_valids])
         
         return {'mse_loss': loss}
@@ -75,9 +78,8 @@ class Jigsaw3D(pl.LightningModule):
         
         mse_loss = loss_dict['mse_loss']
         self.log(f"training_loss/mse_loss", mse_loss, on_step=False, on_epoch=True)
-        total_loss = mse_loss
 
-        return total_loss
+        return mse_loss
     
 
     def validation_step(self, data_dict, idx):
@@ -85,22 +87,25 @@ class Jigsaw3D(pl.LightningModule):
         loss_dict = self._loss(data_dict, output_dict)
         mse_loss = loss_dict['mse_loss']
         self.log(f"val/mse_loss", mse_loss, on_step=False, on_epoch=True)
-        # gt_trans = data_dict['part_trans']
-        # gt_rots = data_dict['part_quat']
-        # trans = torch.cat([gt_trans, gt_rots], dim=-1)
-        # noise_trans = randn_tensor(trans.shape, device=self.device)
-        # valids = data_dict['part_valids']
+        
+        
+        gt_trans = data_dict['part_trans']
+        gt_rots = data_dict['part_quat']
+        trans = torch.cat([gt_trans, gt_rots], dim=-1)
+        noise_trans = randn_tensor(trans.shape, device=self.device)
+        valids = data_dict['part_valids']
 
-        # for t in tqdm(self.noise_scheduler.timesteps):
-        #     timesteps = t.reshape(-1).repeat(len(noise_trans)).cuda()
 
-        #     pred_noise = self.diffusion(noise_trans, timesteps, data_dict)
-        #     valid_indices = valids.flatten().nonzero(as_tuple=False).squeeze()
-        #     result = torch.zeros(noise_trans.shape[0]*noise_trans.shape[1], 7).cuda()
-        #     result[valid_indices] = pred_noise
-        #     vNext = self.noise_scheduler.step(result.reshape(noise_trans.shape[0], noise_trans.shape[1], -1), 
-        #                                                      t, noise_trans).prev_sample
-        #     noise_trans = vNext
+        for t in tqdm(self.noise_scheduler.timesteps):
+            timesteps = t.reshape(-1).repeat(len(noise_trans)).cuda()
+
+            pred_noise = self.diffusion(noise_trans, timesteps, data_dict)
+            valid_indices = valids.flatten().nonzero(as_tuple=False).squeeze()
+            result = torch.zeros(noise_trans.shape[0]*noise_trans.shape[1], 7).cuda()
+            result[valid_indices] = pred_noise
+            vNext = self.noise_scheduler.step(result.reshape(noise_trans.shape[0], noise_trans.shape[1], -1), 
+                                                             t, noise_trans).prev_sample
+            noise_trans = vNext
 
         # pts = data_dict['part_pcs']
         # pred_translation = noise_trans[..., :3]
@@ -119,7 +124,7 @@ class Jigsaw3D(pl.LightningModule):
         # self.acc_list.append(torch.mean(acc))
         # self.rmse_r_list.append(torch.mean(rmse_r))
         # self.rmse_t_list.append(torch.mean(rmse_t))
-        
+        pass
 
 
     def on_validation_epoch_end(self):
@@ -131,16 +136,19 @@ class Jigsaw3D(pl.LightningModule):
         # self.rmse_t_list = []
         pass
 
+    def test_step(self, data_dict, idx):
+        self.validation_step(data_dict, idx)
+        pass
+    
+    def on_test_epoch_end(self):
+        pass
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(
             self.parameters(),
-            lr=5e-4,
+            lr=2e-4,
             betas=(0.95, 0.999),
             weight_decay=1e-6,
             eps=1e-08,
         )
         return optimizer
-
-    def on_test_epoch_end(self):
-        pass
