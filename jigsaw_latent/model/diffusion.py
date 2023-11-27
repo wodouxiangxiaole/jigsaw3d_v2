@@ -69,45 +69,28 @@ class DiffModel(nn.Module):
         self.pos_embedding = lambda x, eo=embedder_pos: eo.embed(x)
         self.pos_fc = nn.Linear(63, self.model_channels)
 
-
         self.shape_embedding = nn.Linear(4, self.model_channels)
 
         # Pos encoding for indicating the sequence. which part is for the reference
         self.pos_encoding = PositionalEncoding(self.model_channels)
 
-        self.out_linear = nn.Linear(self.model_channels, self.out_channels)
+        self.out = nn.Linear(self.model_channels, self.out_channels)
 
         self.output_linear1 = nn.Linear(self.model_channels, self.model_channels)
         self.output_linear2 = nn.Linear(self.model_channels, self.model_channels // 2)
         self.output_linear3 = nn.Linear(self.model_channels // 2, self.out_channels)
 
 
-    # def _gen_mask(self, L, N, B, mask):
-    #     self_block = torch.ones(L, L, device=mask.device)  # Each L points should talk to each other
-    #     self_mask = torch.block_diag(*([self_block] * N))  # Create block diagonal tensor
-    #     self_mask = self_mask.unsqueeze(0).repeat(B, 1, 1)  # Expand dimensions to [B, N*L, N*L]
-
-    #     flattened_mask = mask.unsqueeze(-1).repeat(1, 1, L).flatten(1, 2)  # shape [B, N*L]
-    #     flattened_mask = flattened_mask.unsqueeze(1)  # shape [B, 1, N*L]
-    #     gen_mask = flattened_mask * flattened_mask.transpose(-1, -2)  # shape [B, N*L, N*L]
-    #     return self_mask, gen_mask
-    
-
     def _gen_mask(self, L, N, B, mask):
-        # Create a self_block with an extra node
-        self_block = torch.ones(L+1, L+1, device=mask.device)
+        self_block = torch.ones(L, L, device=mask.device)  # Each L points should talk to each other
+        self_mask = torch.block_diag(*([self_block] * N))  # Create block diagonal tensor
+        self_mask = self_mask.unsqueeze(0).repeat(B, 1, 1)  # Expand dimensions to [B, N*L, N*L]
 
-        # Create block diagonal tensor
-        self_mask = torch.block_diag(*([self_block] * N))
-        # Expand dimensions to [B, N*(L+1), N*(L+1)]
-        self_mask = self_mask.unsqueeze(0).repeat(B, 1, 1)
-
-        flattened_mask = mask.unsqueeze(-1).repeat(1, 1, L+1).flatten(1, 2)  # shape [B, N*L]
+        flattened_mask = mask.unsqueeze(-1).repeat(1, 1, L).flatten(1, 2)  # shape [B, N*L]
         flattened_mask = flattened_mask.unsqueeze(1)  # shape [B, 1, N*L]
         gen_mask = flattened_mask * flattened_mask.transpose(-1, -2)  # shape [B, N*L, N*L]
-
         return self_mask, gen_mask
-
+    
 
     def _gen_cond(self, timesteps, x, xyz, latent):
         time_emb = self.time_embed(timestep_embedding(timesteps, self.model_channels))
@@ -128,19 +111,13 @@ class DiffModel(nn.Module):
     
 
     def _out(self, data_emb, B, N, L):
-        out = data_emb.reshape(B, N, L+1, self.model_channels)
+        out = data_emb.reshape(B, N, L, self.model_channels)
         # Avg pooling
-        # out = out.mean(dim=2)
-        
-        # use dummy node aggreage features
-        out = out[:, :, 0, :]
-
-        # out_dec = self.output_linear1(out)
-        # out_dec = self.activation(out_dec)
-        # out_dec = self.output_linear2(out_dec)
-        # out_dec = self.output_linear3(out_dec)
-        out_dec = self.out_linear(out)
-        
+        out = out.mean(dim=2)
+        out_dec = self.output_linear1(out)
+        out_dec = self.activation(out_dec)
+        out_dec = self.output_linear2(out_dec)
+        out_dec = self.output_linear3(out_dec)
         return out_dec
 
     def forward(self, x, timesteps, latent, xyz, part_valids):
@@ -161,31 +138,29 @@ class DiffModel(nn.Module):
 
         self_mask, gen_mask = self._gen_mask(L, N, B, part_valids)
 
-        # # pe for indicate the dummy token
-        pe = torch.zeros((B, L+1, self.model_channels), device=x.device) 
+        # # pe
+        pe = torch.zeros_like(x_emb.reshape(B, N, -1)) 
         pe = self.pos_encoding(pe)  # B, N, C
-        pe = pe.reshape(B, 1, L+1, -1).repeat(1, N, 1, 1)  # B, N, L, C
+        pe = pe.reshape(B, N, 1, -1).repeat(1, 1, L, 1)  # B, N, L, C
 
 
         x_emb = x_emb.reshape(B, N, 1, -1)
         x_emb = x_emb.repeat(1, 1, L, 1)
         
         condition_emb = shape_emb.reshape(B, N*L, -1) + \
-                            pos_emb.reshape(B, N*L, -1) + time_emb
+                            pos_emb.reshape(B, N*L, -1) + time_emb \
+                            + pe.reshape(B, N*L, -1)
         
-
         # B, N*L, C
         data_emb = x_emb.reshape(B, N*L, -1) 
 
         data_emb = data_emb + condition_emb
 
-        data_emb = torch.cat([self.learnable_embedding.weight.unsqueeze(0).repeat(B, 1, 1).unsqueeze(2),
-                               data_emb.reshape(B, N, L, -1)], dim=2).reshape(B, -1, self.model_channels)
 
-        data_emb = data_emb + pe.reshape(B, -1, self.model_channels)
         for layer in self.transformer_layers:
             data_emb = layer(data_emb, self_mask, gen_mask)
             
+
         # data_emb (B, N*L, C)
         out_dec = self._out(data_emb, B, N, L)
 

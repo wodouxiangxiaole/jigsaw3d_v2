@@ -1,7 +1,7 @@
 data:
 
-  batch_size: 12
-  val_batch_size: 12
+  batch_size: 22
+  val_batch_size: 22
   num_workers: 12
   save_nepoch: 50
   val_nepoch: 100
@@ -11,7 +11,7 @@ data:
   data_val_dir: "../multi_part_assembly/fracture_ae/latent_data/Bottle/val/fixed_first_part_as_ref_with_gt_pc/"
   category: "Bottle"
   rot_range: -1
-  overfit: 13
+  overfit: -1
 
   data_keys:
     - 'part_ids'
